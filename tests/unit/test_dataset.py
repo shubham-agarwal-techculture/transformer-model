@@ -1,6 +1,6 @@
 import torch
 
-from transformer.dataset import TextChunkDataset, create_dataloader, load_text
+from transformer.dataset import TextChunkDataset, create_dataloader, load_text, prepare_text
 
 
 def test_text_chunk_dataset_shapes(tiny_corpus, tiny_tokenizer):
@@ -23,3 +23,10 @@ def test_load_text(tmp_path):
     path = tmp_path / "sample.txt"
     path.write_text("hello world", encoding="utf-8")
     assert load_text(path) == "hello world"
+
+
+def test_prepare_text_strips_gutenberg_markers():
+    raw = "header\n*** START OF THE BOOK ***\nChapter 1\nbody\n*** END OF THE BOOK ***\nfooter"
+    cleaned = prepare_text(raw)
+    assert cleaned == "Chapter 1\nbody"
+    assert prepare_text(raw, strip_gutenberg=False) == raw

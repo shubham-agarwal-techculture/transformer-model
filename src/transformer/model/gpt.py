@@ -25,6 +25,7 @@ class GPT(nn.Module):
         )
         self.ln_f = nn.LayerNorm(config.d_model)
         self.lm_head = nn.Linear(config.d_model, config.vocab_size, bias=False)
+        self.lm_head.weight = self.token_emb.weight
 
     def forward(self, idx: torch.Tensor) -> torch.Tensor:
         batch, seq_len = idx.shape

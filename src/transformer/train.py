@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import torch
@@ -8,6 +9,13 @@ from torch.utils.data import DataLoader
 
 from transformer.config import ModelConfig, TrainConfig
 from transformer.model.gpt import GPT
+
+
+@dataclass
+class CheckpointMetadata:
+    step: int = 0
+    max_steps: int | None = None
+    eval_loss: float | None = None
 
 
 def compute_loss(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
@@ -69,6 +77,7 @@ def save_checkpoint(
     model_config: ModelConfig,
     tokenizer_dict: dict,
     optimizer: torch.optim.Optimizer | None = None,
+    metadata: CheckpointMetadata | None = None,
 ) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -79,14 +88,51 @@ def save_checkpoint(
     }
     if optimizer is not None:
         payload["optimizer_state"] = optimizer.state_dict()
+    if metadata is not None:
+        payload["step"] = metadata.step
+        payload["max_steps"] = metadata.max_steps
+        payload["eval_loss"] = metadata.eval_loss
     torch.save(payload, path)
 
 
-def load_checkpoint(path: str | Path, device: str = "cpu") -> tuple[GPT, ModelConfig, dict, dict | None]:
+def load_checkpoint(
+    path: str | Path, device: str = "cpu"
+) -> tuple[GPT, ModelConfig, dict, dict | None, CheckpointMetadata]:
     payload = torch.load(path, map_location=device, weights_only=False)
     model_config = ModelConfig(**payload["model_config"])
     model = GPT(model_config)
     model.load_state_dict(payload["model_state"])
     model.to(device)
     optimizer_state = payload.get("optimizer_state")
-    return model, model_config, payload["tokenizer"], optimizer_state
+    metadata = CheckpointMetadata(
+        step=payload.get("step", 0),
+        max_steps=payload.get("max_steps"),
+        eval_loss=payload.get("eval_loss"),
+    )
+    return model, model_config, payload["tokenizer"], optimizer_state, metadata
+
+
+def persist_training_checkpoint(
+    out_dir: str | Path,
+    step: int,
+    model: GPT,
+    model_config: ModelConfig,
+    tokenizer_dict: dict,
+    optimizer: torch.optim.Optimizer,
+    *,
+    max_steps: int,
+    eval_loss: float | None = None,
+    numbered: bool = False,
+) -> Path:
+    """Save latest.pt and optionally a step-numbered checkpoint."""
+    out_dir = Path(out_dir)
+    metadata = CheckpointMetadata(step=step, max_steps=max_steps, eval_loss=eval_loss)
+
+    latest_path = out_dir / "latest.pt"
+    save_checkpoint(latest_path, model, model_config, tokenizer_dict, optimizer, metadata)
+
+    if numbered:
+        step_path = out_dir / f"step_{step:06d}.pt"
+        save_checkpoint(step_path, model, model_config, tokenizer_dict, optimizer, metadata)
+
+    return latest_path
