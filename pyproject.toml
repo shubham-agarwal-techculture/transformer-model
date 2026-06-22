@@ -7,6 +7,8 @@ name = "transformer"
 version = "0.1.0"
 description = "A simple GPT-style transformer for training on book text"
 readme = "README.md"
+license = "MIT"
+license-files = ["license.md"]
 requires-python = ">=3.10"
 dependencies = [
     "torch>=2.0.0",

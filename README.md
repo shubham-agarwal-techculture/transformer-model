@@ -21,6 +21,7 @@ The project is organized for **progressive disclosure of complexity**: each modu
 - [Testing](#testing)
 - [Tips for better output](#tips-for-better-output)
 - [Design principles](#design-principles)
+- [License](#license)
 
 ---
 
@@ -427,6 +428,7 @@ Char-level models need **many passes** over the text. If output is gibberish, th
 transformer_model/
 ├── pyproject.toml              # package deps and pytest config
 ├── README.md
+├── license.md                  # MIT License
 ├── data/
 │   └── book.txt                # your training text (not committed)
 ├── checkpoints/
@@ -528,3 +530,11 @@ pytest tests/unit/           # unit tests only
 - KV-cache for faster generation
 - Learning rate warmup / cosine schedule
 - Resume training from checkpoint (via `--resume`)
+
+---
+
+## License
+
+This project is licensed under the [MIT License](license.md).
+
+Copyright (c) 2026 Shubham Agarwal.
