@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+"""Generate text from a trained checkpoint."""
+
+from __future__ import annotations
+
+import argparse
+
+from transformer.generate import generate
+from transformer.tokenizer import CharTokenizer
+from transformer.train import load_checkpoint
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Generate text from a checkpoint")
+    parser.add_argument("--checkpoint", type=str, required=True)
+    parser.add_argument("--prompt", type=str, default="")
+    parser.add_argument("--max-new-tokens", type=int, default=200)
+    parser.add_argument("--temperature", type=float, default=0.8)
+    parser.add_argument("--device", type=str, default="cpu")
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    model, _, tokenizer_dict, _ = load_checkpoint(args.checkpoint, device=args.device)
+    tokenizer = CharTokenizer.from_dict(tokenizer_dict)
+
+    output = generate(
+        model,
+        tokenizer,
+        args.prompt,
+        max_new_tokens=args.max_new_tokens,
+        device=args.device,
+        temperature=args.temperature,
+    )
+    print(output)
+
+
+if __name__ == "__main__":
+    main()

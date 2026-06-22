@@ -1,0 +1,51 @@
+Metadata-Version: 2.4
+Name: transformer
+Version: 0.1.0
+Summary: A simple GPT-style transformer for training on book text
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: torch>=2.0.0
+Requires-Dist: tqdm>=4.65.0
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0.0; extra == "dev"
+
+# Transformer Book Trainer
+
+A simple, from-scratch GPT-style decoder-only transformer built with PyTorch. Train it on any book or text file and generate continuations.
+
+## Setup
+
+```bash
+pip install -e ".[dev]"
+```
+
+## Add training data
+
+Place your text file at `data/book.txt` (or pass any path via `--data`).
+
+## Train
+
+```bash
+python scripts/train_book.py --data data/book.txt --out checkpoints/
+```
+
+## Generate
+
+```bash
+python scripts/generate.py --checkpoint checkpoints/latest.pt --prompt "Chapter 1"
+```
+
+## Test
+
+```bash
+pytest
+```
+
+## Project layout
+
+```
+src/transformer/     Core library (config, tokenizer, model, train, generate)
+scripts/             CLI entrypoints
+tests/               unit, integration, acceptance, regression tests
+data/                Place your book text here
+```
