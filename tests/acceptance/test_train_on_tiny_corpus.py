@@ -6,7 +6,7 @@ from transformer.config import ModelConfig, TrainConfig
 from transformer.dataset import create_dataloader, load_text
 from transformer.generate import generate
 from transformer.model.gpt import GPT
-from transformer.tokenizer import CharTokenizer
+from transformer.tokenizer import BPETokenizer
 from transformer.train import evaluate_loss, train_step
 
 
@@ -15,7 +15,7 @@ FIXTURE_PATH = Path(__file__).resolve().parent.parent / "fixtures" / "tiny_book.
 
 def test_train_and_generate_on_tiny_corpus():
     text = load_text(FIXTURE_PATH)
-    tokenizer = CharTokenizer.from_text(text)
+    tokenizer = BPETokenizer.from_text(text, vocab_size=64, show_progress=False)
     model_config = ModelConfig(
         vocab_size=tokenizer.vocab_size,
         d_model=32,

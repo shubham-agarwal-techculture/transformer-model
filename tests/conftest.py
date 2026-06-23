@@ -2,7 +2,7 @@ import pytest
 import torch
 
 from transformer.config import ModelConfig, TrainConfig
-from transformer.tokenizer import CharTokenizer
+from transformer.tokenizer import BPETokenizer
 
 
 @pytest.fixture
@@ -15,12 +15,12 @@ def tiny_corpus() -> str:
 
 
 @pytest.fixture
-def tiny_tokenizer(tiny_corpus: str) -> CharTokenizer:
-    return CharTokenizer.from_text(tiny_corpus)
+def tiny_tokenizer(tiny_corpus: str) -> BPETokenizer:
+    return BPETokenizer.from_text(tiny_corpus, vocab_size=64, show_progress=False)
 
 
 @pytest.fixture
-def tiny_config(tiny_tokenizer: CharTokenizer) -> ModelConfig:
+def tiny_config(tiny_tokenizer: BPETokenizer) -> ModelConfig:
     return ModelConfig(
         vocab_size=tiny_tokenizer.vocab_size,
         d_model=32,

@@ -5,8 +5,8 @@ from transformer.model.gpt import GPT
 from transformer.train import compute_loss, train_step
 
 # Golden values captured with torch.manual_seed(42) and the tiny fixtures in conftest.
-GOLDEN_INITIAL_LOSS = 18.690275192260742
-GOLDEN_POST_STEP_LOSS = 17.367345809936523
+GOLDEN_INITIAL_LOSS = 22.701580047607422
+GOLDEN_POST_STEP_LOSS = 21.963275909423828
 
 
 def test_fixed_seed_initial_loss(tiny_corpus, tiny_tokenizer, tiny_config, train_config):

@@ -13,7 +13,7 @@ from transformer.runtime import (
     maybe_compile_model,
     probe_hardware,
 )
-from transformer.tokenizer import CharTokenizer
+from transformer.tokenizer import load_tokenizer
 from transformer.train import load_checkpoint
 
 
@@ -68,7 +68,7 @@ def main() -> None:
 
     model, _, tokenizer_dict, _, _ = load_checkpoint(args.checkpoint, device=runtime.device)
     model = maybe_compile_model(model, runtime)
-    tokenizer = CharTokenizer.from_dict(tokenizer_dict)
+    tokenizer = load_tokenizer(tokenizer_dict)
 
     print(format_runtime_summary(runtime, profile))
 

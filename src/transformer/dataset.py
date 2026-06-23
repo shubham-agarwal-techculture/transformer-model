@@ -5,7 +5,7 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader, Dataset
 
-from transformer.tokenizer import CharTokenizer
+from transformer.tokenizer import BPETokenizer
 
 
 GUTENBERG_START = "*** START OF"
@@ -37,7 +37,7 @@ def prepare_text(text: str, strip_gutenberg: bool = True) -> str:
 class TextChunkDataset(Dataset):
     """Sliding-window dataset where y is x shifted by one token."""
 
-    def __init__(self, text: str, tokenizer: CharTokenizer, block_size: int) -> None:
+    def __init__(self, text: str, tokenizer: BPETokenizer, block_size: int) -> None:
         self.block_size = block_size
         self.tokens = torch.tensor(tokenizer.encode(text), dtype=torch.long)
         if len(self.tokens) <= block_size:
@@ -55,7 +55,7 @@ class TextChunkDataset(Dataset):
 
 def create_dataloader(
     text: str,
-    tokenizer: CharTokenizer,
+    tokenizer: BPETokenizer,
     block_size: int,
     batch_size: int,
     shuffle: bool = True,

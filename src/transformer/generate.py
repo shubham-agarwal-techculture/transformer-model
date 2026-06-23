@@ -4,7 +4,7 @@ import torch
 import torch.nn.functional as F
 
 from transformer.model.gpt import GPT
-from transformer.tokenizer import CharTokenizer
+from transformer.tokenizer import BPETokenizer
 
 
 def sample_next_token(
@@ -28,7 +28,7 @@ def sample_next_token(
 @torch.no_grad()
 def generate(
     model: GPT,
-    tokenizer: CharTokenizer,
+    tokenizer: BPETokenizer,
     prompt: str,
     max_new_tokens: int,
     device: str = "cpu",
@@ -61,7 +61,7 @@ def generate(
 @torch.no_grad()
 def _generate_naive(
     model: GPT,
-    tokenizer: CharTokenizer,
+    tokenizer: BPETokenizer,
     prompt: str,
     max_new_tokens: int,
     device: str,
@@ -84,7 +84,7 @@ def _generate_naive(
 @torch.no_grad()
 def _generate_with_kv_cache(
     model: GPT,
-    tokenizer: CharTokenizer,
+    tokenizer: BPETokenizer,
     prompt: str,
     max_new_tokens: int,
     device: str,

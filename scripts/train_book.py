@@ -22,7 +22,7 @@ from transformer.runtime import (
     probe_hardware,
     suggest_batch_size,
 )
-from transformer.tokenizer import CharTokenizer
+from transformer.tokenizer import BPETokenizer, load_tokenizer
 from transformer.train import (
     evaluate_loss,
     load_checkpoint,
@@ -71,6 +71,12 @@ def parse_args() -> argparse.Namespace:
         help="Batch size (default: auto from hardware profile)",
     )
     parser.add_argument("--block-size", type=int, default=256)
+    parser.add_argument(
+        "--vocab-size",
+        type=int,
+        default=4096,
+        help="BPE vocabulary size (number of merge operations + initial tokens)",
+    )
     parser.add_argument("--d-model", type=int, default=128)
     parser.add_argument("--n-heads", type=int, default=4)
     parser.add_argument("--n-layers", type=int, default=4)
@@ -119,7 +125,7 @@ class TrainingSession:
         self,
         model: GPT,
         model_config: ModelConfig,
-        tokenizer: CharTokenizer,
+        tokenizer: BPETokenizer,
         optimizer: torch.optim.Optimizer,
         dataloader,
         train_config: TrainConfig,
@@ -233,7 +239,7 @@ def main() -> None:
 
     raw_text = load_text(args.data)
     text = prepare_text(raw_text, strip_gutenberg=args.strip_gutenberg)
-    tokenizer = CharTokenizer.from_text(text)
+    tokenizer = BPETokenizer.from_text(text, vocab_size=args.vocab_size)
 
     model_config = ModelConfig(
         vocab_size=tokenizer.vocab_size,
@@ -279,7 +285,7 @@ def main() -> None:
                 "Use the same text file or train from scratch."
             )
         model_config = resumed_config
-        tokenizer = CharTokenizer.from_dict(tokenizer_dict)
+        tokenizer = load_tokenizer(tokenizer_dict)
         start_step = metadata.step
         if args.max_steps is None and metadata.max_steps is not None:
             max_steps = metadata.max_steps
@@ -295,7 +301,7 @@ def main() -> None:
         optimizer.load_state_dict(optimizer_state)
 
     print(f"Text length: {len(text):,} characters")
-    print(f"Vocab size: {tokenizer.vocab_size}")
+    print(f"Vocab size: {tokenizer.vocab_size} ({tokenizer.merge_count} BPE merges)")
     print(f"Steps per epoch: {steps_per_epoch:,}")
     print(f"Training for {max_steps:,} steps (~{max_steps / steps_per_epoch:.2f} epochs)")
     print(f"Batch size: {train_config.batch_size}")

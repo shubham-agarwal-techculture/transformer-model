@@ -1,6 +1,6 @@
 # Transformer Book Trainer
 
-A simple, from-scratch **decoder-only GPT-style transformer** built with PyTorch. Train it on any book or plain-text file, then generate continuations character by character.
+A simple, from-scratch **decoder-only GPT-style transformer** built with PyTorch. Train it on any book or plain-text file, then generate continuations token by token using a from-scratch **BPE tokenizer**.
 
 The project is organized for **progressive disclosure of complexity**: each module does one job, and the full model is assembled from small, readable pieces.
 
@@ -28,18 +28,18 @@ The project is organized for **progressive disclosure of complexity**: each modu
 
 ## How it works
 
-At a high level, the system learns to **predict the next character** given all previous characters in a fixed-size window.
+At a high level, the system learns to **predict the next token** given all previous tokens in a fixed-size window.
 
 ```
   Input text:  "Call me Ishmael"
-  Tokenized:   [C, a, l, l,   m, e, ...]
+  Tokenized:   [Call,  me,  Ish, mael, ...]   # BPE subword tokens
   Training:    given "Call me Ish"  → predict "m"
-               given "all me Ishm"  → predict "a"
+               given "all me Ishm"  → predict "ael"
                ... (every position in every chunk)
-  Generation:  start with a prompt, repeatedly predict one character at a time
+  Generation:  start with a prompt, repeatedly predict one token at a time
 ```
 
-This is **causal language modeling** — the same approach used by GPT models, but with a character-level vocabulary instead of subwords.
+This is **causal language modeling** — the same approach used by GPT models, with a **BPE subword vocabulary** trained on your corpus (default 4,096 tokens).
 
 ---
 
@@ -50,7 +50,7 @@ flowchart TB
     subgraph dataLayer [Data layer]
         BookFile[Text file e.g. book.txt]
         Prepare[prepare_text]
-        Tokenizer[CharTokenizer]
+        Tokenizer[BPETokenizer]
         Dataset[TextChunkDataset]
         DataLoader[DataLoader]
     end
@@ -102,7 +102,7 @@ sequenceDiagram
 
     User->>TrainScript: --data book.txt
     TrainScript->>Data: load_text + prepare_text
-    Data->>Data: build CharTokenizer vocab
+    Data->>Data: train BPE merges + build vocab
     Data->>Data: sliding windows x y
     loop each training step
         TrainScript->>Model: forward x
@@ -119,7 +119,7 @@ sequenceDiagram
 ```mermaid
 flowchart TD
     A[Load raw text] --> B[Strip Gutenberg boilerplate]
-    B --> C[Build char vocabulary]
+    B --> C[Train BPE tokenizer]
     C --> R[Probe hardware + build RuntimeConfig]
     R --> D[Training loop]
     D --> E[Forward pass + loss + AdamW step]
@@ -136,8 +136,8 @@ flowchart TD
 ### What happens in one training step
 
 1. Sample a batch of `(x, y)` pairs from the text.
-   - `x` = 256 characters (input)
-   - `y` = same sequence shifted by 1 (target / next character)
+   - `x` = 256 tokens (input)
+   - `y` = same sequence shifted by 1 (target / next token)
 2. Run `x` through the GPT model → logits of shape `(batch, 256, vocab_size)`.
 3. Compute cross-entropy between logits and `y`.
 4. Backpropagate and update weights with AdamW.
@@ -155,7 +155,7 @@ Sample 0:
   y = [e, l, l, o]
 ```
 
-Each sample teaches the model to predict the next character at every position in the chunk.
+Each sample teaches the model to predict the next token at every position in the chunk.
 
 ---
 
@@ -163,7 +163,7 @@ Each sample teaches the model to predict the next character at every position in
 
 ```mermaid
 flowchart TD
-    Prompt[User prompt] --> Encode[CharTokenizer.encode]
+    Prompt[User prompt] --> Encode[BPETokenizer.encode]
     Encode --> Context[Token ID list]
     Context --> Prime[Prime KV cache with prompt]
     Prime --> Loop{Generate max_new_tokens}
@@ -177,7 +177,7 @@ flowchart TD
     Trim -->|no| Loop
     RePrime --> Loop
 
-    Loop -->|done| Decode[CharTokenizer.decode]
+    Loop -->|done| Decode[BPETokenizer.decode]
     Decode --> Output[Generated text]
 ```
 
@@ -187,8 +187,8 @@ By default, generation uses a **KV cache** so each new token reuses past attenti
 
 | Mode | Flags | Behavior |
 |------|-------|----------|
-| Stochastic (default) | `--temperature 0.7 --top-k 40` | Sample from top 40 likely chars, scaled by temperature |
-| Greedy | `--greedy` | Always pick the highest-probability character |
+| Stochastic (default) | `--temperature 0.7 --top-k 40` | Sample from top 40 likely tokens, scaled by temperature |
+| Greedy | `--greedy` | Always pick the highest-probability token |
 | Custom | `--temperature 1.0 --top-k 80` | More random, wider candidate pool |
 
 Lower temperature → more conservative, repetitive output.  
@@ -198,7 +198,7 @@ Higher temperature → more creative, but less coherent if the model is under-tr
 
 ## Model internals
 
-The GPT model is a stack of identical **transformer blocks** with **causal (masked) self-attention**, so each character can only attend to itself and characters before it — never the future.
+The GPT model is a stack of identical **transformer blocks** with **causal (masked) self-attention**, so each token can only attend to itself and tokens before it — never the future.
 
 ### GPT block diagram
 
@@ -247,7 +247,7 @@ The attention matrix is masked so position `i` cannot look at positions `j > i`:
   t3  [ 1   1   1   1 ]
 ```
 
-This is what makes the model suitable for **autoregressive generation** — it never cheats by peeking at future characters during training.
+This is what makes the model suitable for **autoregressive generation** — it never cheats by peeking at future tokens during training.
 
 ### Default model hyperparameters
 
@@ -256,9 +256,9 @@ This is what makes the model suitable for **autoregressive generation** — it n
 | `d_model` | 128 | Embedding / hidden dimension |
 | `n_heads` | 4 | Attention heads (`head_dim = 32`) |
 | `n_layers` | 4 | Stacked transformer blocks |
-| `block_size` | 256 | Max context length (characters) |
+| `block_size` | 256 | Max context length (tokens) |
 | `dropout` | 0.1 | Regularization during training |
-| `vocab_size` | auto | Number of unique characters in the text |
+| `vocab_size` | 4096 (default) | BPE vocabulary size (`--vocab-size`) |
 
 **Weight tying:** the token embedding matrix and the output (`lm_head`) layer share the same weights — a standard GPT trick that reduces parameters and improves learning.
 
@@ -271,7 +271,7 @@ flowchart LR
     Raw[Raw .txt file]
     Strip[prepare_text]
     Clean[Clean book text]
-    Vocab[Unique chars sorted]
+    Vocab[BPE merges + vocab]
     Encode[encode to IDs]
     Windows[Sliding windows]
     Batches[PyTorch DataLoader]
@@ -280,11 +280,18 @@ flowchart LR
     Strip --> Clean --> Vocab --> Encode --> Windows --> Batches
 ```
 
-### Character tokenizer
+### BPE tokenizer
 
-- Vocabulary = every unique character in the training text (letters, digits, punctuation, whitespace, newlines).
-- `encode("hello")` → list of integer IDs
-- `decode([...])` → original string (lossless round-trip)
+From-scratch **Byte Pair Encoding** (no external tokenizer libraries):
+
+1. Seed vocabulary with `<unk>` plus every unique character in the training text.
+2. Iteratively merge the most frequent adjacent token pairs until `vocab_size` is reached (default 4,096).
+3. `encode(text)` applies merges in training order and returns integer IDs.
+4. `decode([...])` joins token strings back into text (lossless for in-vocab text).
+
+Unknown characters at inference map to `<unk>`. Checkpoints store merge rules and `token_to_id` mappings.
+
+> **Breaking change:** checkpoints trained with the legacy character tokenizer cannot be loaded. Retrain from scratch with BPE.
 
 ### Gutenberg stripping
 
@@ -437,7 +444,8 @@ batch_size = suggest_batch_size(runtime, model_config)  # or pass explicit overr
 | `--epochs` | `3.0` | Full passes over the text |
 | `--max-steps` | *(auto)* | Fixed step count; overrides `--epochs` |
 | `--batch-size` | auto | Batch size (from hardware profile when omitted) |
-| `--block-size` | `256` | Context window (characters) |
+| `--block-size` | `256` | Context window (tokens) |
+| `--vocab-size` | `4096` | BPE vocabulary size |
 | `--d-model` | `128` | Model dimension |
 | `--n-heads` | `4` | Attention heads |
 | `--n-layers` | `4` | Transformer layers |
@@ -455,7 +463,7 @@ batch_size = suggest_batch_size(runtime, model_config)  # or pass explicit overr
 |----------|---------|-------------|
 | `--checkpoint` | *(required)* | Path to `.pt` checkpoint |
 | `--prompt` | `""` | Starting text |
-| `--max-new-tokens` | `200` | Characters to generate |
+| `--max-new-tokens` | `200` | Tokens to generate |
 | `--temperature` | `0.7` | Sampling temperature |
 | `--top-k` | `40` | Limit sampling to top-k logits |
 | `--greedy` | off | Greedy decoding (temperature = 0) |
@@ -482,7 +490,7 @@ Each `.pt` file stores:
 ```
 ├── model_state      # GPT weights
 ├── model_config     # architecture hyperparameters
-├── tokenizer        # char ↔ id mappings
+├── tokenizer        # BPE merges + token ↔ id mappings
 ├── optimizer_state  # for resuming training
 ├── step             # completed training steps
 ├── max_steps        # target step count
@@ -527,10 +535,10 @@ Times vary by hardware. With `--runtime-preset auto` on a many-core CPU with amp
 |---------|-------|----------------------------|---------|
 | `--max-steps 1000` | 1,000 | ~10 min | Poor — not enough data seen |
 | `--max-steps 5000` | 5,000 | ~1.5 hr | Some structure, still noisy |
-| `--epochs 1` | ~38,000 | ~6–7 hr | Decent char-level prose |
+| `--epochs 1` | ~38,000 | ~6–7 hr | Decent subword prose |
 | `--epochs 3` (default) | ~115,000 | ~18–20 hr | Best results on CPU |
 
-Char-level models need **many passes** over the text. If output is gibberish, the model is almost certainly under-trained.
+BPE models still need **many passes** over the text. If output is gibberish, the model is almost certainly under-trained.
 
 ---
 
@@ -550,7 +558,7 @@ transformer_model/
 ├── src/transformer/
 │   ├── config.py               # ModelConfig, TrainConfig
 │   ├── runtime.py              # HardwareProfile, RuntimeConfig, auto-tuning
-│   ├── tokenizer.py            # CharTokenizer
+│   ├── tokenizer.py            # BPETokenizer
 │   ├── dataset.py              # load, prepare, sliding-window dataset
 │   ├── model/
 │   │   ├── attention.py        # causal multi-head self-attention (+ KV cache)
@@ -640,7 +648,7 @@ pytest tests/unit/           # unit tests only
 
 ## Design principles
 
-- **Simplicity first** — char-level tokens, no BPE, no distributed training in v1.
+- **Simplicity first** — from-scratch BPE, no distributed training in v1.
 - **Progressive disclosure** — attention → block → GPT → train → generate, one file per concept.
 - **Hardware decoupling** — `runtime.py` probes the host and applies performance settings; core model code stays portable.
 - **Maintainability** — config dataclasses, small public API, full test pyramid.
@@ -648,7 +656,6 @@ pytest tests/unit/           # unit tests only
 
 ### Planned future enhancements
 
-- Subword (BPE) tokenization
 - Learning rate warmup / cosine schedule
 - Mixed-precision training on supported accelerators
 
