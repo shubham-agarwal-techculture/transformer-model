@@ -7,7 +7,7 @@ def test_attention_output_shape():
     batch, seq_len, d_model, n_heads = 2, 8, 32, 4
     attn = CausalSelfAttention(d_model, n_heads, block_size=16, dropout=0.0)
     x = torch.randn(batch, seq_len, d_model)
-    out = attn(x)
+    out, _ = attn(x)
     assert out.shape == (batch, seq_len, d_model)
 
 
@@ -30,8 +30,8 @@ def test_future_tokens_do_not_affect_past_outputs():
     x2[0, 3, :] = torch.randn(32) * 100
 
     with torch.no_grad():
-        out1 = attn(x1)
-        out2 = attn(x2)
+        out1, _ = attn(x1)
+        out2, _ = attn(x2)
 
     assert torch.allclose(out1[0, :3, :], out2[0, :3, :])
     assert not torch.allclose(out1[0, 3, :], out2[0, 3, :])

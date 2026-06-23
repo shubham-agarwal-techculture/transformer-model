@@ -59,6 +59,10 @@ def create_dataloader(
     block_size: int,
     batch_size: int,
     shuffle: bool = True,
+    runtime: "RuntimeConfig | None" = None,
 ) -> DataLoader:
+    from transformer.runtime import RuntimeConfig, dataloader_kwargs
+
     dataset = TextChunkDataset(text, tokenizer, block_size)
-    return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
+    loader_kwargs = dataloader_kwargs(runtime) if runtime is not None else {}
+    return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, **loader_kwargs)

@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from transformer.config import ModelConfig, TrainConfig
+from transformer.runtime import RuntimeConfig, batch_transfer_kwargs, maybe_compile_model
 from transformer.model.gpt import GPT
 
 
@@ -28,11 +29,13 @@ def train_step(
     batch: tuple[torch.Tensor, torch.Tensor],
     optimizer: torch.optim.Optimizer,
     device: str,
+    runtime: RuntimeConfig | None = None,
 ) -> float:
     model.train()
     x, y = batch
-    x = x.to(device)
-    y = y.to(device)
+    transfer_kwargs = batch_transfer_kwargs(runtime) if runtime is not None else {}
+    x = x.to(device, **transfer_kwargs)
+    y = y.to(device, **transfer_kwargs)
     optimizer.zero_grad()
     logits = model(x)
     loss = compute_loss(logits, y)
@@ -41,16 +44,28 @@ def train_step(
     return loss.item()
 
 
+def prepare_model_for_training(model: GPT, runtime: RuntimeConfig) -> GPT:
+    model.to(runtime.device)
+    return maybe_compile_model(model, runtime)
+
+
 @torch.no_grad()
-def evaluate_loss(model: GPT, dataloader: DataLoader, device: str, max_batches: int | None = None) -> float:
+def evaluate_loss(
+    model: GPT,
+    dataloader: DataLoader,
+    device: str,
+    max_batches: int | None = None,
+    runtime: RuntimeConfig | None = None,
+) -> float:
     model.eval()
     losses: list[float] = []
+    transfer_kwargs = batch_transfer_kwargs(runtime) if runtime is not None else {}
     for i, batch in enumerate(dataloader):
         if max_batches is not None and i >= max_batches:
             break
         x, y = batch
-        x = x.to(device)
-        y = y.to(device)
+        x = x.to(device, **transfer_kwargs)
+        y = y.to(device, **transfer_kwargs)
         logits = model(x)
         losses.append(compute_loss(logits, y).item())
     return sum(losses) / len(losses) if losses else 0.0

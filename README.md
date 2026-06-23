@@ -15,6 +15,7 @@ The project is organized for **progressive disclosure of complexity**: each modu
 - [Model internals](#model-internals)
 - [Data pipeline](#data-pipeline)
 - [Quick start](#quick-start)
+- [Runtime performance](#runtime-performance)
 - [CLI reference](#cli-reference)
 - [Configuration](#configuration)
 - [Project layout](#project-layout)
@@ -62,12 +63,21 @@ flowchart TB
         LMHead[Language model head]
     end
 
+    subgraph perfLayer [Runtime layer]
+        Probe[probe_hardware]
+        RuntimeCfg[RuntimeConfig]
+        Apply[apply_runtime_config]
+    end
+
     subgraph runtime [Runtime]
         TrainLoop[Training loop]
         Checkpoint[Checkpoint .pt]
         Generate[Text generation]
     end
 
+    Probe --> RuntimeCfg --> Apply
+    Apply --> DataLoader
+    Apply --> TrainLoop
     BookFile --> Prepare --> Tokenizer --> Dataset --> DataLoader
     DataLoader --> TrainLoop
     TrainLoop --> Blocks
@@ -110,7 +120,8 @@ sequenceDiagram
 flowchart TD
     A[Load raw text] --> B[Strip Gutenberg boilerplate]
     B --> C[Build char vocabulary]
-    C --> D[Training loop]
+    C --> R[Probe hardware + build RuntimeConfig]
+    R --> D[Training loop]
     D --> E[Forward pass + loss + AdamW step]
     E --> F{Step divisible by save_every?}
     F -->|yes| G[Save latest.pt + step_N.pt]
@@ -154,18 +165,23 @@ Each sample teaches the model to predict the next character at every position in
 flowchart TD
     Prompt[User prompt] --> Encode[CharTokenizer.encode]
     Encode --> Context[Token ID list]
-    Context --> Loop{Generate max_new_tokens}
+    Context --> Prime[Prime KV cache with prompt]
+    Prime --> Loop{Generate max_new_tokens}
 
-    Loop --> Trim[Keep last block_size tokens]
-    Trim --> Forward[GPT forward pass]
+    Loop --> Forward[Single-token forward with KV cache]
     Forward --> Logits[Logits at last position]
     Logits --> Sample[top-k + temperature sampling]
     Sample --> Append[Append token to context]
-    Append --> Loop
+    Append --> Trim{Context longer than block_size?}
+    Trim -->|yes| RePrime[Re-prime cache from trimmed context]
+    Trim -->|no| Loop
+    RePrime --> Loop
 
     Loop -->|done| Decode[CharTokenizer.decode]
     Decode --> Output[Generated text]
 ```
+
+By default, generation uses a **KV cache** so each new token reuses past attention state instead of re-running the full context. Disable with `--no-kv-cache` when debugging.
 
 ### Sampling options
 
@@ -300,19 +316,25 @@ Place your text at `data/book.txt`, or pass any path via `--data`.
 
 ### 3. Train
 
-Full training (default **3 epochs**):
+Full training (default **3 epochs**, auto-tuned for your hardware):
 
 ```bash
 python scripts/train_book.py --data data/book.txt --out checkpoints/
 ```
 
-Quick trial on CPU (~1–2 hours):
+On startup the script prints a **runtime summary** (CPU count, RAM, thread count, DataLoader workers, suggested batch size). Training also logs text length, vocab size, steps per epoch, and eval loss every 100 steps.
+
+Quick trial on CPU:
 
 ```bash
 python scripts/train_book.py --data data/book.txt --max-steps 5000
 ```
 
-Training prints text length, vocab size, steps per epoch, and eval loss every 100 steps.
+Use a JSON runtime profile for explicit control:
+
+```bash
+python scripts/train_book.py --data data/book.txt --runtime-config configs/runtime.example.json
+```
 
 ### 4. Generate
 
@@ -329,6 +351,79 @@ pytest
 
 ---
 
+## Runtime performance
+
+Training and inference performance settings live in a **separate runtime layer** (`src/transformer/runtime.py`). Model code, loss functions, and the training loop never hardcode hardware assumptions — they receive a `RuntimeConfig` built at startup.
+
+```mermaid
+flowchart LR
+    Probe[probe_hardware] --> Defaults[default_runtime_config]
+    Defaults --> Merge[CLI + JSON overrides]
+    Merge --> Apply[apply_runtime_config]
+    Apply --> Train[DataLoader + threads + compile]
+    Apply --> Infer[KV cache + threads]
+```
+
+### What gets tuned automatically (`--runtime-preset auto`)
+
+| Knob | Behavior |
+|------|----------|
+| **Device** | `cuda` → `mps` → `cpu` (first available) |
+| **PyTorch threads** | Matches logical CPU count |
+| **DataLoader workers** | ~half of CPU cores (capped at 8), with prefetch |
+| **Batch size** | Suggested from available RAM (e.g. 128 on 64+ GB systems) |
+| **MKL-DNN** | Enabled on CPU for faster matmuls |
+| **KV cache** | Enabled for inference |
+| **`torch.compile`** | Off by default; opt in with `--compile` |
+
+### Presets and overrides
+
+| Approach | When to use |
+|----------|-------------|
+| `--runtime-preset auto` | Default — tune for detected hardware |
+| `--runtime-preset minimal` | Portable baseline (no worker processes, no thread overrides) |
+| `--runtime-config path.json` | Pin exact settings for your machine or CI |
+| `--batch-size N` | Override auto batch size |
+| `--num-workers N` | Override DataLoader worker count |
+| `--compile` / `--no-compile` | Enable or disable `torch.compile` |
+
+Example `configs/runtime.example.json` (14-core CPU, 128 GB RAM):
+
+```json
+{
+  "num_threads": 14,
+  "num_interop_threads": 4,
+  "dataloader_num_workers": 7,
+  "dataloader_persistent_workers": true,
+  "dataloader_prefetch_factor": 2,
+  "use_mkldnn": true,
+  "suggested_batch_size": 128,
+  "inference_use_kv_cache": true,
+  "compile_model": false
+}
+```
+
+On a GPU machine, a typical override would set `"device": "cuda"`, `"dataloader_pin_memory": true`, and optionally `"compile_model": true`.
+
+### Programmatic use
+
+```python
+from transformer.runtime import (
+    apply_runtime_config,
+    build_runtime_config,
+    probe_hardware,
+    suggest_batch_size,
+)
+
+profile = probe_hardware()
+runtime = build_runtime_config(preset="auto", device="auto")
+apply_runtime_config(runtime)
+
+batch_size = suggest_batch_size(runtime, model_config)  # or pass explicit override
+```
+
+---
+
 ## CLI reference
 
 ### `scripts/train_book.py`
@@ -341,13 +436,17 @@ pytest
 | `--save-every` | `500` | Save `latest.pt` and a numbered checkpoint every N steps |
 | `--epochs` | `3.0` | Full passes over the text |
 | `--max-steps` | *(auto)* | Fixed step count; overrides `--epochs` |
-| `--batch-size` | `32` | Batch size |
+| `--batch-size` | auto | Batch size (from hardware profile when omitted) |
 | `--block-size` | `256` | Context window (characters) |
 | `--d-model` | `128` | Model dimension |
 | `--n-heads` | `4` | Attention heads |
 | `--n-layers` | `4` | Transformer layers |
 | `--lr` | `3e-4` | Learning rate |
-| `--device` | `cuda` or `cpu` | Auto-detects GPU |
+| `--device` | `auto` | `auto`, `cpu`, `cuda`, or `mps` |
+| `--runtime-preset` | `auto` | `auto` (hardware-tuned) or `minimal` (portable) |
+| `--runtime-config` | *(none)* | JSON file overriding `RuntimeConfig` fields |
+| `--num-workers` | auto | DataLoader worker processes |
+| `--compile` / `--no-compile` | off | Use `torch.compile` when supported |
 | `--strip-gutenberg` / `--no-strip-gutenberg` | on | Strip Gutenberg header/footer |
 
 ### `scripts/generate.py`
@@ -360,7 +459,11 @@ pytest
 | `--temperature` | `0.7` | Sampling temperature |
 | `--top-k` | `40` | Limit sampling to top-k logits |
 | `--greedy` | off | Greedy decoding (temperature = 0) |
-| `--device` | `cpu` | Inference device |
+| `--device` | `auto` | `auto`, `cpu`, `cuda`, or `mps` |
+| `--runtime-preset` | `auto` | `auto` or `minimal` |
+| `--runtime-config` | *(none)* | JSON file overriding `RuntimeConfig` fields |
+| `--compile` / `--no-compile` | off | Use `torch.compile` when supported |
+| `--no-kv-cache` | off | Disable KV-cache inference (slower; for debugging) |
 
 ### Checkpoint contents
 
@@ -402,17 +505,26 @@ python scripts/train_book.py --data data/book.txt --resume checkpoints/latest.pt
 
 ## Configuration
 
-Configs live in `src/transformer/config.py` as dataclasses:
+Configs are split between **model/training hyperparameters** and **runtime performance**:
 
 ```python
+# src/transformer/config.py — model and training
 ModelConfig(vocab_size, d_model, n_heads, n_layers, block_size, dropout)
 TrainConfig(lr, batch_size, max_steps, eval_interval, device)
+
+# src/transformer/runtime.py — hardware-aware performance (decoupled)
+HardwareProfile(cpu_count, ram_gb, has_cuda, cuda_device_count, has_mps, platform)
+RuntimeConfig(device, num_threads, dataloader_num_workers, suggested_batch_size, ...)
 ```
+
+`RuntimeConfig` fields can be overridden via `--runtime-config` JSON without changing Python code. See [Runtime performance](#runtime-performance).
 
 ### Training time estimates (CPU, Moby Dick ~1.2M chars)
 
-| Setting | Steps | Approx. time | Quality |
-|---------|-------|--------------|---------|
+Times vary by hardware. With `--runtime-preset auto` on a many-core CPU with ample RAM (larger batch size, parallel data loading), expect noticeably faster steps than the baseline `batch_size=32` setup.
+
+| Setting | Steps | Approx. time (baseline CPU) | Quality |
+|---------|-------|----------------------------|---------|
 | `--max-steps 1000` | 1,000 | ~10 min | Poor — not enough data seen |
 | `--max-steps 5000` | 5,000 | ~1.5 hr | Some structure, still noisy |
 | `--epochs 1` | ~38,000 | ~6–7 hr | Decent char-level prose |
@@ -433,17 +545,20 @@ transformer_model/
 │   └── book.txt                # your training text (not committed)
 ├── checkpoints/
 │   └── latest.pt               # saved after training
+├── configs/
+│   └── runtime.example.json    # example RuntimeConfig override file
 ├── src/transformer/
 │   ├── config.py               # ModelConfig, TrainConfig
+│   ├── runtime.py              # HardwareProfile, RuntimeConfig, auto-tuning
 │   ├── tokenizer.py            # CharTokenizer
 │   ├── dataset.py              # load, prepare, sliding-window dataset
 │   ├── model/
-│   │   ├── attention.py        # causal multi-head self-attention
+│   │   ├── attention.py        # causal multi-head self-attention (+ KV cache)
 │   │   ├── ffn.py              # feed-forward network
 │   │   ├── block.py            # pre-norm transformer block
 │   │   └── gpt.py              # full GPT model
 │   ├── train.py                # loss, train step, checkpoint I/O
-│   └── generate.py             # autoregressive sampling
+│   └── generate.py             # autoregressive sampling (KV-cache path)
 ├── scripts/
 │   ├── train_book.py           # training CLI
 │   └── generate.py             # generation CLI
@@ -461,15 +576,20 @@ transformer_model/
 flowchart LR
     config[config.py] --> gpt[gpt.py]
     config --> train[train.py]
-    tokenizer[tokenizer.py] --> dataset[dataset.py]
+    runtime[runtime.py] --> dataset[dataset.py]
+    runtime --> train
+    runtime --> generate[generate.py]
+    tokenizer[tokenizer.py] --> dataset
     dataset --> train
     attention[attention.py] --> block[block.py]
     ffn[ffn.py] --> block
     block --> gpt
     gpt --> train
-    gpt --> generate[generate.py]
+    gpt --> generate
     train --> scripts_train[scripts/train_book.py]
     generate --> scripts_gen[scripts/generate.py]
+    runtime --> scripts_train
+    runtime --> scripts_gen
 ```
 
 ---
@@ -492,7 +612,7 @@ flowchart TB
 
 | Layer | Directory | What it verifies |
 |-------|-----------|------------------|
-| **Unit** | `tests/unit/` | Tokenizer round-trip, attention mask, tensor shapes |
+| **Unit** | `tests/unit/` | Tokenizer, attention mask, shapes, runtime probing, KV-cache parity |
 | **Integration** | `tests/integration/` | Gradients flow, checkpoint save/load |
 | **Acceptance** | `tests/acceptance/` | Loss decreases on tiny text, generation returns output |
 | **Regression** | `tests/regression/` | Exact loss values with `seed=42` to catch silent drift |
@@ -510,10 +630,11 @@ pytest tests/unit/           # unit tests only
 ## Tips for better output
 
 1. **Train long enough.** For a full book on CPU, aim for at least 1 epoch (`--epochs 1`), ideally 3 (the default).
-2. **Use a book-style prompt.** Match the tone and opening words of your training text (e.g. `"Call me Ishmael."` for Moby Dick).
-3. **Try `--greedy` first** when evaluating an under-trained model — sampling adds noise.
-4. **Watch eval loss.** It should steadily decrease. If it plateaus above ~2.0, train longer or consider a slightly larger model (`--d-model 256 --n-layers 6`).
-5. **Strip boilerplate.** Keep `--strip-gutenberg` on for Project Gutenberg files so the model learns prose, not license text.
+2. **Let auto-tuning work.** Use `--runtime-preset auto` (the default) so batch size, workers, and threads match your machine. Override only when needed.
+3. **Use a book-style prompt.** Match the tone and opening words of your training text (e.g. `"Call me Ishmael."` for Moby Dick).
+4. **Try `--greedy` first** when evaluating an under-trained model — sampling adds noise.
+5. **Watch eval loss.** It should steadily decrease. If it plateaus above ~2.0, train longer or consider a slightly larger model (`--d-model 256 --n-layers 6`).
+6. **Strip boilerplate.** Keep `--strip-gutenberg` on for Project Gutenberg files so the model learns prose, not license text.
 
 ---
 
@@ -521,15 +642,15 @@ pytest tests/unit/           # unit tests only
 
 - **Simplicity first** — char-level tokens, no BPE, no distributed training in v1.
 - **Progressive disclosure** — attention → block → GPT → train → generate, one file per concept.
+- **Hardware decoupling** — `runtime.py` probes the host and applies performance settings; core model code stays portable.
 - **Maintainability** — config dataclasses, small public API, full test pyramid.
 - **Readable top-to-bottom** — follow the data from `config.py` through `generate.py`.
 
-### Planned future enhancements (not in v1)
+### Planned future enhancements
 
 - Subword (BPE) tokenization
-- KV-cache for faster generation
 - Learning rate warmup / cosine schedule
-- Resume training from checkpoint (via `--resume`)
+- Mixed-precision training on supported accelerators
 
 ---
 

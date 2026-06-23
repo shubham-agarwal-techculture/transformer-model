@@ -12,7 +12,12 @@ class TransformerBlock(nn.Module):
         self.ln2 = nn.LayerNorm(d_model)
         self.ffn = FeedForward(d_model, dropout)
 
-    def forward(self, x):
-        x = x + self.attn(self.ln1(x))
+    def forward(
+        self,
+        x,
+        kv_cache: tuple | None = None,
+    ) -> tuple:
+        attn_out, present_kv = self.attn(self.ln1(x), kv_cache=kv_cache)
+        x = x + attn_out
         x = x + self.ffn(self.ln2(x))
-        return x
+        return x, present_kv

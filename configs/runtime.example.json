@@ -1,0 +1,11 @@
+{
+  "num_threads": 14,
+  "num_interop_threads": 4,
+  "dataloader_num_workers": 7,
+  "dataloader_persistent_workers": true,
+  "dataloader_prefetch_factor": 2,
+  "use_mkldnn": true,
+  "suggested_batch_size": 128,
+  "inference_use_kv_cache": true,
+  "compile_model": false
+}
